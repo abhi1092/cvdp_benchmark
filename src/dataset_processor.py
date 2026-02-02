@@ -2036,12 +2036,22 @@ class AgenticProcessor (DatasetProcessor):
             script_file.write(f"# Get current user and group IDs\n")
             script_file.write(f"USER_ID=$(id -u)\n")
             script_file.write(f"GROUP_ID=$(id -g)\n\n")
-            script_file.write(f"if [ \"$DEBUG_MODE\" = true ]; then\n")
-            script_file.write(f"  echo \"DEBUG MODE: Starting container with bash entrypoint\"\n")
-            script_file.write(f"  {container_runtime.get_compose_command()} -f {docker_compose_path} -p {project_name} run --rm --user $USER_ID:$GROUP_ID --entrypoint bash agent\n")
-            script_file.write(f"else\n")
-            script_file.write(f"  {container_runtime.get_compose_command()} -f {docker_compose_path} -p {project_name} run --rm --user $USER_ID:$GROUP_ID agent\n")
-            script_file.write(f"fi\n")
+
+            # For Podman, don't use --user flag as it handles user namespaces differently
+            if container_runtime.is_podman():
+                script_file.write(f"if [ \"$DEBUG_MODE\" = true ]; then\n")
+                script_file.write(f"  echo \"DEBUG MODE: Starting container with bash entrypoint\"\n")
+                script_file.write(f"  {container_runtime.get_compose_command()} -f {docker_compose_path} -p {project_name} run --rm --entrypoint bash agent\n")
+                script_file.write(f"else\n")
+                script_file.write(f"  {container_runtime.get_compose_command()} -f {docker_compose_path} -p {project_name} run --rm agent\n")
+                script_file.write(f"fi\n")
+            else:
+                script_file.write(f"if [ \"$DEBUG_MODE\" = true ]; then\n")
+                script_file.write(f"  echo \"DEBUG MODE: Starting container with bash entrypoint\"\n")
+                script_file.write(f"  {container_runtime.get_compose_command()} -f {docker_compose_path} -p {project_name} run --rm --user $USER_ID:$GROUP_ID --entrypoint bash agent\n")
+                script_file.write(f"else\n")
+                script_file.write(f"  {container_runtime.get_compose_command()} -f {docker_compose_path} -p {project_name} run --rm --user $USER_ID:$GROUP_ID agent\n")
+                script_file.write(f"fi\n")
             script_file.write(f"exit_code=$?\n\n")
             script_file.write(f"# Exit with the same code as the docker command\n")
             script_file.write(f"exit $exit_code\n")

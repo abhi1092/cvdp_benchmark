@@ -13,9 +13,10 @@ from .llm_lib.openai_llm import OpenAI_Instance
 from .llm_lib.model_factory import ModelFactory
 from threading import Thread, Timer, current_thread
 from .create_jsonl import create_jsonl
-import queue 
+import queue
 from .model_helpers import ModelHelpers
 from .config_manager import config
+from .container_runtime import container_runtime
 from .constants import CODE_COMPREHENSION_CATEGORIES, LLM_RETRY_COUNT_DEFAULT
 from dotenv import load_dotenv
 import shutil
@@ -1516,8 +1517,8 @@ class AgenticProcessor (DatasetProcessor):
         self.include_golden_patch = False
         self.include_harness = False
 
-        # Ensure patch_image Docker image exists for agentic heavy processing
-        result = subprocess.run(["docker", "images", "-q", "patch_image"],
+        # Ensure patch_image container image exists for agentic heavy processing
+        result = subprocess.run(container_runtime.build_images_cmd("patch_image"),
                                 capture_output=True,
                                 text=True
         )
@@ -1528,16 +1529,16 @@ class AgenticProcessor (DatasetProcessor):
             os.makedirs(self.prefix, exist_ok=True)
             dockerfile = os.path.join(self.prefix, "Dockerfile.patch_image")
 
-            print(f"[INFO] Docker image 'patch_image' not found, building it...")
+            print(f"[INFO] Container image 'patch_image' not found, building it...")
             with open(dockerfile, "w") as f:
                 f.write("FROM ubuntu:22.04\nRUN apt update && apt install -y git")
 
             # Build image
-            subprocess.run(["docker", "build", "-t", "patch_image", "-f", dockerfile, "."],
+            subprocess.run(container_runtime.build_image_build_cmd("patch_image", dockerfile, "."),
                             check=True)
 
         else:
-            print(f"[INFO] Docker image 'patch_image' already exists...")
+            print(f"[INFO] Container image 'patch_image' already exists...")
 
     # ----------------------------------------
     # - Process JSON File
@@ -1857,7 +1858,7 @@ class AgenticProcessor (DatasetProcessor):
             print(f"Executing agent script: {script_path}")
 
             # Define kill command for monitoring
-            kill_cmd = f"docker-compose -f {docker_compose_path} -p {project_name} kill agent"
+            kill_cmd = f"{container_runtime.get_compose_command()} -f {docker_compose_path} -p {project_name} kill agent"
             
             # Execute the script in a subprocess
             with open(logfile, 'w') as log_file:
@@ -1902,7 +1903,7 @@ class AgenticProcessor (DatasetProcessor):
                     # Extract project name prefix for filtering (remove timestamp)
                     project_prefix = "_".join(project_name.split("_")[:-1])
                     # Use more robust filtering approach
-                    cleanup_cmd = f"docker network ls --filter name={project_prefix} -q | xargs -r docker network rm 2>/dev/null || true"
+                    cleanup_cmd = f"{container_runtime.get_container_command()} network ls --filter name={project_prefix} -q | xargs -r {container_runtime.get_container_command()} network rm 2>/dev/null || true"
                     subprocess.run(cleanup_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 except Exception:
                     # Suppress even the Python exception messages
@@ -1917,7 +1918,7 @@ class AgenticProcessor (DatasetProcessor):
                 finally:
                     # Clean up the before snapshot volume
                     try:
-                        subprocess.run(["docker", "volume", "rm", "-f", before_volume], 
+                        subprocess.run(container_runtime.build_volume_rm_cmd(before_volume),
                                      check=False, capture_output=True)
                     except Exception as cleanup_e:
                         print(f"[WARNING] Failed to cleanup before volume {before_volume}: {cleanup_e}")
@@ -2037,9 +2038,9 @@ class AgenticProcessor (DatasetProcessor):
             script_file.write(f"GROUP_ID=$(id -g)\n\n")
             script_file.write(f"if [ \"$DEBUG_MODE\" = true ]; then\n")
             script_file.write(f"  echo \"DEBUG MODE: Starting container with bash entrypoint\"\n")
-            script_file.write(f"  docker-compose -f {docker_compose_path} -p {project_name} run --rm --user $USER_ID:$GROUP_ID --entrypoint bash agent\n")
+            script_file.write(f"  {container_runtime.get_compose_command()} -f {docker_compose_path} -p {project_name} run --rm --user $USER_ID:$GROUP_ID --entrypoint bash agent\n")
             script_file.write(f"else\n")
-            script_file.write(f"  docker-compose -f {docker_compose_path} -p {project_name} run --rm --user $USER_ID:$GROUP_ID agent\n")
+            script_file.write(f"  {container_runtime.get_compose_command()} -f {docker_compose_path} -p {project_name} run --rm --user $USER_ID:$GROUP_ID agent\n")
             script_file.write(f"fi\n")
             script_file.write(f"exit_code=$?\n\n")
             script_file.write(f"# Exit with the same code as the docker command\n")
@@ -2137,7 +2138,7 @@ class AgenticProcessor (DatasetProcessor):
                             formatted_repo = 'p' + formatted_repo
                         
                         # Clean up any networks with similar pattern
-                        cleanup_cmd = f"docker network ls --filter name=agent_{formatted_repo}_{issue_id_str} -q | xargs -r docker network rm 2>/dev/null || true"
+                        cleanup_cmd = f"{container_runtime.get_container_command()} network ls --filter name=agent_{formatted_repo}_{issue_id_str} -q | xargs -r {container_runtime.get_container_command()} network rm 2>/dev/null || true"
                         subprocess.run(cleanup_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     except Exception:
                         # Completely suppress errors from cleanup
@@ -2380,7 +2381,7 @@ class AgenticProcessor (DatasetProcessor):
             print(f"[WARNING] Failed to create before snapshot volume: {e}")
             # Try to clean up the volume if it was created
             try:
-                subprocess.run(["docker", "volume", "rm", "-f", before_volume], 
+                subprocess.run(container_runtime.build_volume_rm_cmd(before_volume),
                              check=False, capture_output=True)
             except:
                 pass

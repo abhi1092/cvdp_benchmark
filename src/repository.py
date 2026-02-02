@@ -12,8 +12,9 @@ from src import network_util
 import dotenv
 from src.dir_monitor import DirectorySizeMonitor
 from src.config_manager import config
+from src.container_runtime import container_runtime
 from src.constants import (
-    SCORING_CONFIG, 
+    SCORING_CONFIG,
     LLM_SUBJECTIVE_CATEGORIES,
     BLEU_SCORING_CATEGORIES
 )
@@ -427,8 +428,8 @@ class Repository:
         project_prefix = "_".join(project_name.split("_")[:-1])
 
         # Create the docker command with project name
-        # line_cmd = f"docker-compose -f {docker} -p {project_name} run {cmd} {service}"
-        kill_cmd = f"docker-compose -f {docker} -p {project_name} kill {service}"
+        # line_cmd = f"{container_runtime.get_compose_command()} -f {docker} -p {project_name} run {cmd} {service}"
+        kill_cmd = container_runtime.build_compose_kill_cmd(docker, project_name, service)
         
         # Save the command with absolute paths to a shell script
         # Get the directory where the docker-compose file is located
@@ -455,31 +456,31 @@ class Repository:
             if self.network_name:
                 script_file.write(f"# Use shared bridge network: {self.network_name}\n")
                 script_file.write(f"NETWORK_CREATED=0\n\n")
-                
+
                 script_file.write(f"# Check if network exists, create if needed\n")
-                script_file.write(f"if ! docker network inspect {self.network_name} &>/dev/null; then\n")
-                script_file.write(f"  echo \"Creating Docker network {self.network_name}...\"\n")
-                script_file.write(f"  docker network create --driver bridge {self.network_name}\n")
+                script_file.write(f"if ! {container_runtime.get_container_command()} network inspect {self.network_name} &>/dev/null; then\n")
+                script_file.write(f"  echo \"Creating container network {self.network_name}...\"\n")
+                script_file.write(f"  {container_runtime.get_container_command()} network create --driver bridge {self.network_name}\n")
                 script_file.write(f"  NETWORK_CREATED=1\n")
                 script_file.write(f"fi\n\n")
             
             script_file.write(f"# Function to clean up resources\n")
             script_file.write(f"cleanup() {{\n")
-            script_file.write(f"  echo \"Cleaning up Docker resources...\"\n")
-            script_file.write(f"  docker-compose -f {docker} -p {project_name} kill {service} 2>/dev/null || true\n")
-            
+            script_file.write(f"  echo \"Cleaning up container resources...\"\n")
+            script_file.write(f"  {container_runtime.get_compose_command()} -f {docker} -p {project_name} kill {service} 2>/dev/null || true\n")
+
             # Cleanup image
-            script_file.write(f"  docker rmi {project_name}-{service} 2>/dev/null || true\n")
+            script_file.write(f"  {container_runtime.get_container_command()} rmi {project_name}-{service} 2>/dev/null || true\n")
 
             # Only clean up network if we created it
             if self.network_name:
                 script_file.write(f"  if [ $NETWORK_CREATED -eq 1 ]; then\n")
-                script_file.write(f"    echo \"Removing Docker network {self.network_name}...\"\n")
-                script_file.write(f"    docker network rm {self.network_name} 2>/dev/null || true\n")
+                script_file.write(f"    echo \"Removing container network {self.network_name}...\"\n")
+                script_file.write(f"    {container_runtime.get_container_command()} network rm {self.network_name} 2>/dev/null || true\n")
                 script_file.write(f"  fi\n")
             else:
                 # Use more robust filtering approach for default networks
-                script_file.write(f"  docker network ls --filter name={project_prefix} -q | xargs -r docker network rm 2>/dev/null || true\n")
+                script_file.write(f"  {container_runtime.get_container_command()} network ls --filter name={project_prefix} -q | xargs -r {container_runtime.get_container_command()} network rm 2>/dev/null || true\n")
                 
             script_file.write(f"}}\n\n")
             script_file.write(f"# Set up cleanup trap\n")
@@ -493,9 +494,9 @@ class Repository:
             script_file.write(f"GROUP_ID=$(id -g)\n\n")
             script_file.write(f"if [ \"$DEBUG_MODE\" = true ]; then\n")
             script_file.write(f"  echo \"DEBUG MODE: Starting container with bash entrypoint\"\n")
-            script_file.write(f"  docker-compose -f {docker} -p {project_name} run --rm --user $USER_ID:$GROUP_ID -e HOME=/code/rundir --entrypoint bash {cmd} {service}\n")
+            script_file.write(f"  {container_runtime.get_compose_command()} -f {docker} -p {project_name} run --rm --user $USER_ID:$GROUP_ID -e HOME=/code/rundir --entrypoint bash {cmd} {service}\n")
             script_file.write(f"else\n")
-            script_file.write(f"  docker-compose -f {docker} -p {project_name} run --rm --user $USER_ID:$GROUP_ID -e HOME=/code/rundir {cmd} {service}\n")
+            script_file.write(f"  {container_runtime.get_compose_command()} -f {docker} -p {project_name} run --rm --user $USER_ID:$GROUP_ID -e HOME=/code/rundir {cmd} {service}\n")
             script_file.write(f"fi\n")
             script_file.write(f"exit_code=$?\n\n")
             script_file.write(f"# Exit with the same code as the docker command\n")
@@ -522,7 +523,7 @@ class Repository:
         if not self.network_name and self.manage_network:
             try:
                 # Use more robust filtering approach
-                cleanup_cmd = f"docker network ls --filter name={project_prefix} -q | xargs -r docker network rm 2>/dev/null || true"
+                cleanup_cmd = f"{container_runtime.get_container_command()} network ls --filter name={project_prefix} -q | xargs -r {container_runtime.get_container_command()} network rm 2>/dev/null || true"
                 subprocess.run(cleanup_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except Exception:
                 # Suppress all cleanup errors
@@ -566,15 +567,15 @@ class Repository:
             
             # Check if volume already exists
             script_file.write("# Check if volume already exists\n")
-            script_file.write(f"if docker volume inspect {volume_name} &>/dev/null; then\n")
+            script_file.write(f"if {container_runtime.get_container_command()} volume inspect {volume_name} &>/dev/null; then\n")
             script_file.write(f"  echo \"Volume {volume_name} already exists. Removing it first...\"\n")
-            script_file.write(f"  docker volume rm -f {volume_name}\n")
+            script_file.write(f"  {container_runtime.get_container_command()} volume rm -f {volume_name}\n")
             script_file.write("fi\n\n")
-            
+
             # Create the volume
-            script_file.write("# Create Docker volume\n")
-            script_file.write(f"echo \"Creating Docker volume: {volume_name}\"\n")
-            script_file.write(f"docker volume create {volume_name}\n\n")
+            script_file.write("# Create container volume\n")
+            script_file.write(f"echo \"Creating container volume: {volume_name}\"\n")
+            script_file.write(f"{container_runtime.get_container_command()} volume create {volume_name}\n\n")
             
             if repo_url and commit_hash:
                 # Find existing git cache mirror
@@ -602,15 +603,15 @@ class Repository:
                 script_file.write("fi\n\n")
                 
                 # Ensure patch_image exists
-                script_file.write("# Ensure patch_image Docker image exists\n")
-                script_file.write("if ! docker image inspect patch_image &>/dev/null; then\n")
-                script_file.write("  echo \"Building patch_image Docker image...\"\n")
+                script_file.write("# Ensure patch_image container image exists\n")
+                script_file.write(f"if ! {container_runtime.get_container_command()} image inspect patch_image &>/dev/null; then\n")
+                script_file.write("  echo \"Building patch_image container image...\"\n")
                 script_file.write("  TEMP_DOCKERFILE=$(mktemp)\n")
                 script_file.write("  cat > \"$TEMP_DOCKERFILE\" << 'EOF'\n")
                 script_file.write("FROM ubuntu:22.04\n")
                 script_file.write("RUN apt update && apt install -y git\n")
                 script_file.write("EOF\n")
-                script_file.write("  docker build -t patch_image -f \"$TEMP_DOCKERFILE\" .\n")
+                script_file.write(f"  {container_runtime.get_container_command()} build -t patch_image -f \"$TEMP_DOCKERFILE\" .\n")
                 script_file.write("  rm \"$TEMP_DOCKERFILE\"\n")
                 script_file.write("fi\n\n")
                 
@@ -653,7 +654,7 @@ class Repository:
                 script_file.write("echo \"Setting up workspace from git mirror...\"\n")
                 script_file.write("USER_ID=$(id -u)\n")
                 script_file.write("GROUP_ID=$(id -g)\n")
-                script_file.write("docker run --rm \\\n")
+                script_file.write(f"{container_runtime.get_container_command()} run --rm \\\n")
                 script_file.write("  -v \"$MIRROR_DIR:/repo:ro\" \\\n")
                 script_file.write("  -v \"$PATCH_DIR:/patch:ro\" \\\n")
                 script_file.write(f"  -v {volume_name}:/workspace \\\n")
@@ -676,7 +677,7 @@ class Repository:
                 # Fix volume ownership to current user
                 script_file.write("# Fix volume ownership to current user\n")
                 script_file.write("echo \"Fixing volume ownership...\"\n")
-                script_file.write("docker run --rm \\\n")
+                script_file.write(f"{container_runtime.get_container_command()} run --rm \\\n")
                 script_file.write(f"  -v {volume_name}:/workspace \\\n")
                 script_file.write("  ubuntu:22.04 \\\n")
                 script_file.write("  chown -R \"$USER_ID:$GROUP_ID\" /workspace\n\n")
@@ -703,15 +704,15 @@ class Repository:
             
             # Check if volume exists
             script_file.write("# Check if volume exists\n")
-            script_file.write(f"if ! docker volume inspect {volume_name} &>/dev/null; then\n")
+            script_file.write(f"if ! {container_runtime.get_container_command()} volume inspect {volume_name} &>/dev/null; then\n")
             script_file.write(f"  echo \"Volume {volume_name} does not exist. Nothing to destroy.\"\n")
             script_file.write("  exit 0\n")
             script_file.write("fi\n\n")
-            
+
             # Remove the volume
-            script_file.write("# Remove Docker volume\n")
-            script_file.write(f"echo \"Removing Docker volume: {volume_name}\"\n")
-            script_file.write(f"docker volume rm -f {volume_name}\n\n")
+            script_file.write("# Remove container volume\n")
+            script_file.write(f"echo \"Removing container volume: {volume_name}\"\n")
+            script_file.write(f"{container_runtime.get_container_command()} volume rm -f {volume_name}\n\n")
             
             script_file.write("echo \"Workspace volume destruction complete!\"\n")
             script_file.write(f"echo \"Volume {volume_name} has been removed.\"\n")
@@ -785,11 +786,11 @@ class Repository:
             if self.network_name:
                 script_file.write(f"# Use shared bridge network: {self.network_name}\n")
                 script_file.write(f"NETWORK_CREATED=0\n\n")
-                
+
                 script_file.write(f"# Check if network exists, create if needed\n")
-                script_file.write(f"if ! docker network inspect {self.network_name} &>/dev/null; then\n")
-                script_file.write(f"  echo \"Creating Docker network {self.network_name}...\"\n")
-                script_file.write(f"  docker network create --driver bridge {self.network_name}\n")
+                script_file.write(f"if ! {container_runtime.get_container_command()} network inspect {self.network_name} &>/dev/null; then\n")
+                script_file.write(f"  echo \"Creating container network {self.network_name}...\"\n")
+                script_file.write(f"  {container_runtime.get_container_command()} network create --driver bridge {self.network_name}\n")
                 script_file.write(f"  NETWORK_CREATED=1\n")
                 script_file.write(f"fi\n\n")
             
@@ -798,17 +799,17 @@ class Repository:
             script_file.write(f"  echo \"Cleaning up Docker resources...\"\n")
 
             # Cleanup image
-            script_file.write(f"  docker rmi {project_name}-agent 2>/dev/null || true\n")
-            
+            script_file.write(f"  {container_runtime.get_container_command()} rmi {project_name}-agent 2>/dev/null || true\n")
+
             # Only clean up network if we created it
             if self.network_name:
                 script_file.write(f"  if [ $NETWORK_CREATED -eq 1 ]; then\n")
-                script_file.write(f"    echo \"Removing Docker network {self.network_name}...\"\n")
-                script_file.write(f"    docker network rm {self.network_name} 2>/dev/null || true\n")
+                script_file.write(f"    echo \"Removing container network {self.network_name}...\"\n")
+                script_file.write(f"    {container_runtime.get_container_command()} network rm {self.network_name} 2>/dev/null || true\n")
                 script_file.write(f"  fi\n")
             else:
                 # Use more robust filtering approach
-                script_file.write(f"  docker network ls --filter name={project_prefix} -q | xargs -r docker network rm 2>/dev/null || true\n")
+                script_file.write(f"  {container_runtime.get_container_command()} network ls --filter name={project_prefix} -q | xargs -r {container_runtime.get_container_command()} network rm 2>/dev/null || true\n")
                 
             script_file.write(f"}}\n\n")
             script_file.write(f"# Set up cleanup trap\n")
@@ -822,9 +823,9 @@ class Repository:
             script_file.write(f"GROUP_ID=$(id -g)\n\n")
             script_file.write(f"if [ \"$DEBUG_MODE\" = true ]; then\n")
             script_file.write(f"  echo \"DEBUG MODE: Starting container with bash entrypoint\"\n")
-            script_file.write(f"  docker-compose -f {docker_compose_path} -p {project_name} run --rm --user $USER_ID:$GROUP_ID --entrypoint bash agent\n")
+            script_file.write(f"  {container_runtime.get_compose_command()} -f {docker_compose_path} -p {project_name} run --rm --user $USER_ID:$GROUP_ID --entrypoint bash agent\n")
             script_file.write(f"else\n")
-            script_file.write(f"  docker-compose -f {docker_compose_path} -p {project_name} run --rm --user $USER_ID:$GROUP_ID agent\n")
+            script_file.write(f"  {container_runtime.get_compose_command()} -f {docker_compose_path} -p {project_name} run --rm --user $USER_ID:$GROUP_ID agent\n")
             script_file.write(f"fi\n")
             script_file.write(f"exit_code=$?\n\n")
             script_file.write(f"# Exit with the same code as the docker command\n")

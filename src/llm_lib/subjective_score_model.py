@@ -28,34 +28,58 @@ class SubjectiveScoreModel_Instance:
     This model is used to calculate subjective scores by comparing responses to reference answers.
     """
 
-    def __init__(self, context: Any = None, key: Optional[str] = None, model: str = None):
+    def __init__(self, context: Any = None, key: Optional[str] = None, model: str = None, base_url: Optional[str] = None):
         """
         Initialize a subjective scoring model instance.
-        
+
         Args:
             context: Not used for scoring models
-            key: OpenAI API key (will fall back to OPENAI_USER_KEY environment variable)
+            key: API key (will fall back to OPENROUTER_API_KEY or OPENAI_USER_KEY environment variable)
             model: The model version to use
+            base_url: Custom base URL for API (e.g., for OpenRouter)
         """
         if model is None:
             model = config.get("DEFAULT_MODEL")
         self.model = model
         self.debug = False
-        
-        api_key = config.get("OPENAI_USER_KEY")
-        
-        if (key is None) and (api_key is None):
-            raise ValueError("Unable to create Subjective Scoring Model - No API key provided")
-            
-        # Use provided key or fallback to environment variable
-        if key is not None:
-            actual_key = key
+
+        # Check for OpenRouter configuration first
+        openrouter_key = config.get("OPENROUTER_API_KEY")
+        openrouter_base_url = config.get("OPENROUTER_BASE_URL")
+        openrouter_model = config.get("OPENROUTER_MODEL")
+
+        # Determine which API to use
+        use_openrouter = False
+        if openrouter_key and (openrouter_model or model):
+            # If OpenRouter is configured and we have a model, use OpenRouter
+            use_openrouter = True
+            api_key = openrouter_key
+            if openrouter_model and model == config.get("DEFAULT_MODEL"):
+                # Use OpenRouter model if we're using the default model
+                self.model = openrouter_model
+            base_url = base_url or openrouter_base_url
         else:
-            actual_key = api_key
-            
-        # Initialize OpenAI client
-        self.client = openai.OpenAI(api_key=actual_key)
-        logging.info(f"Created Subjective Scoring Model using the provided key. Using model: {self.model}")
+            # Fall back to OpenAI
+            api_key = config.get("OPENAI_USER_KEY")
+
+        # Override with provided key if given
+        if key is not None:
+            api_key = key
+
+        if api_key is None:
+            raise ValueError("Unable to create Subjective Scoring Model - No API key provided")
+
+        # Initialize OpenAI client with appropriate configuration
+        client_kwargs = {"api_key": api_key}
+        if base_url:
+            client_kwargs["base_url"] = base_url
+
+        self.client = openai.OpenAI(**client_kwargs)
+
+        provider = "OpenRouter" if use_openrouter else "OpenAI"
+        logging.info(f"Created Subjective Scoring Model using {provider}. Using model: {self.model}")
+        if base_url:
+            logging.info(f"Using custom base URL: {base_url}")
     
     def set_debug(self, debug: bool = True) -> None:
         """

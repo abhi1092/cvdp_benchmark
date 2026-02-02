@@ -31,10 +31,17 @@ class ModelFactory:
             "gpt-4o": self._create_openai_instance,
             "gpt-4o-mini": self._create_openai_instance,
             "o3-pro": self._create_openai_responses_instance,
-            
+
+            # Anthropic models (via Anthropic API or OpenRouter)
+            "anthropic": self._create_anthropic_instance,
+
+            # OpenRouter models (google, meta, etc.)
+            "google": self._create_openai_instance,
+            "meta": self._create_openai_instance,
+
             # Subjective scoring model
             "sbj_score": self._create_subjective_score_instance,
-            
+
             # Local inference models
             "local_export": self._create_local_export_instance,
             "local_import": self._create_local_import_instance,
@@ -43,50 +50,67 @@ class ModelFactory:
     def create_model(self, model_name: str, context: Any = None, key: Optional[str] = None, **kwargs) -> Any:
         """
         Create a model instance based on the model name.
-        
+
         Args:
             model_name: Name of the model to create
             context: Context to pass to the model constructor
             key: API key to use (if applicable)
             **kwargs: Additional arguments to pass to the model constructor
-            
+
         Returns:
             An instance of the appropriate model class
-        
+
         Raises:
             ValueError: If the model type is not supported
         """
-        # Extract model type from model name (before first hyphen)
-        model_type = model_name.split('-')[0]
-        
-        # For OpenAI models, we use the full model name
+        # For exact matches (like "gpt-4", "gpt-4o-mini", etc.)
         if model_name in self.model_types:
             return self.model_types[model_name](model_name, context, key, **kwargs)
-        # For models that follow a pattern like "anthropic-claude-3", we can match by prefix
-        elif model_type in self.model_types:
+
+        # Extract model type from model name
+        # Support both OpenRouter format (anthropic/claude) and hyphen format (gpt-4-turbo)
+        if '/' in model_name:
+            # OpenRouter format: "anthropic/claude-sonnet-4.5"
+            model_type = model_name.split('/')[0]
+        else:
+            # Hyphen format: "gpt-4-turbo"
+            model_type = model_name.split('-')[0]
+
+        # For models that follow a pattern, match by prefix
+        if model_type in self.model_types:
             return self.model_types[model_type](model_name, context, key, **kwargs)
         else:
             raise ValueError(f"Unsupported model type: {model_name}")
 
     def _create_openai_instance(self, model_name: str, context: Any, key: Optional[str], **kwargs) -> OpenAI_Instance:
         """Create an OpenAI model instance"""
-        return OpenAI_Instance(context=context, key=key, model=model_name)
+        base_url = kwargs.get('base_url', None)
+        return OpenAI_Instance(context=context, key=key, model=model_name, base_url=base_url)
+
+    def _create_anthropic_instance(self, model_name: str, context: Any, key: Optional[str], **kwargs) -> OpenAI_Instance:
+        """Create an Anthropic model instance via OpenRouter"""
+        # Anthropic models are routed through OpenRouter which provides OpenAI-compatible API
+        # The OpenAI_Instance will automatically detect and use OpenRouter if OPENROUTER_API_KEY is set
+        base_url = kwargs.get('base_url', None)
+        return OpenAI_Instance(context=context, key=key, model=model_name, base_url=base_url)
     
     def _create_openai_responses_instance(self, model_name: str, context: Any, key: Optional[str], **kwargs) -> OpenAI_Responses_Instance:
         """Create an OpenAI model instance using responses"""
-        return OpenAI_Responses_Instance(context=context, key=key, model=model_name)
+        base_url = kwargs.get('base_url', None)
+        return OpenAI_Responses_Instance(context=context, key=key, model=model_name, base_url=base_url)
     
     def _create_subjective_score_instance(self, model_name: str, context: Any, key: Optional[str], **kwargs) -> SubjectiveScoreModel_Instance:
         """Create a Subjective Scoring model instance"""
+        base_url = kwargs.get('base_url', None)
         # For the subjective scorer, we extract the underlying model if specified
         parts = model_name.split('_')
         if len(parts) > 2:
             # Format: "sbj_score_gpt4o"
             underlying_model = "_".join(parts[2:])
-            return SubjectiveScoreModel_Instance(context=context, key=key, model=underlying_model)
+            return SubjectiveScoreModel_Instance(context=context, key=key, model=underlying_model, base_url=base_url)
         else:
             # Use default model
-            return SubjectiveScoreModel_Instance(context=context, key=key)
+            return SubjectiveScoreModel_Instance(context=context, key=key, base_url=base_url)
     
     def _create_local_export_instance(self, model_name: str, context: Any, key: Optional[str], **kwargs) -> LocalInferenceModel:
         """Create a Local Export model instance"""

@@ -98,12 +98,20 @@ class ConfigManager:
                            description="Queue timeout in seconds")
         
         # API Keys (not required during initialization, validated when needed)
-        self.register_config("OPENAI_USER_KEY", required=False, 
+        self.register_config("OPENAI_USER_KEY", required=False,
                            description="OpenAI API key for model access")
         self.register_config("ANTHROPIC_API_KEY", required=False,
                            description="Anthropic API key for Claude model access")
         self.register_config("NVIDIA_API_KEY", required=False,
                            description="NVIDIA API key for model access")
+
+        # OpenRouter Configuration
+        self.register_config("OPENROUTER_API_KEY", required=False,
+                           description="OpenRouter API key for model access")
+        self.register_config("OPENROUTER_BASE_URL", default="https://openrouter.ai/api/v1", type_cast=str,
+                           description="OpenRouter API base URL")
+        self.register_config("OPENROUTER_MODEL", required=False,
+                           description="Default OpenRouter model to use")
               
         # Application Configuration
         self.register_config("ENABLE_SUBJECTIVE_SCORING", default=False, type_cast=bool,

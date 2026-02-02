@@ -23,7 +23,7 @@ class OpenAI_Instance:
     # - Initiate the Model
     # ----------------------------------------
 
-    def __init__(self, context : str = "You are a helpful assistant.", key = None, model = None):
+    def __init__(self, context : str = "You are a helpful assistant.", key = None, model = None, base_url = None):
         if model is None:
             model = config.get("DEFAULT_MODEL")
 
@@ -31,18 +31,43 @@ class OpenAI_Instance:
         self.model   = model
         self.debug   = False
 
-        api_key = config.get("OPENAI_USER_KEY")
+        # Check for OpenRouter configuration first
+        openrouter_key = config.get("OPENROUTER_API_KEY")
+        openrouter_base_url = config.get("OPENROUTER_BASE_URL")
+        openrouter_model = config.get("OPENROUTER_MODEL")
 
-        if (key == None) and (api_key == None):
-            raise ValueError("Unable to create Chat Model")
-
-        elif (key != None):
-            self.chat = openai.OpenAI(api_key=key)
-            logging.info(f"Created OpenAI Model using the provided key. Using model: {self.model}")
-
+        # Determine which API to use
+        use_openrouter = False
+        if openrouter_key and (openrouter_model or model):
+            # If OpenRouter is configured and we have a model, use OpenRouter
+            use_openrouter = True
+            api_key = openrouter_key
+            if openrouter_model and model == config.get("DEFAULT_MODEL"):
+                # Use OpenRouter model if we're using the default model
+                self.model = openrouter_model
+            base_url = base_url or openrouter_base_url
         else:
-            self.chat = openai.OpenAI(api_key=api_key)
-            logging.info(f"Created OpenAI Model using the provided key. Using model: {self.model}")
+            # Fall back to OpenAI
+            api_key = config.get("OPENAI_USER_KEY")
+
+        # Override with provided key if given
+        if key is not None:
+            api_key = key
+
+        if api_key is None:
+            raise ValueError("Unable to create Chat Model: No API key found")
+
+        # Create client with appropriate configuration
+        client_kwargs = {"api_key": api_key}
+        if base_url:
+            client_kwargs["base_url"] = base_url
+
+        self.chat = openai.OpenAI(**client_kwargs)
+
+        provider = "OpenRouter" if use_openrouter else "OpenAI"
+        logging.info(f"Created {provider} Model. Using model: {self.model}")
+        if base_url:
+            logging.info(f"Using custom base URL: {base_url}")
 
         self.set_debug(False)  # Debug off by default
 

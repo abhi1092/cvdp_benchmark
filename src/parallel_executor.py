@@ -118,10 +118,11 @@ class ParallelExecutor:
                                     task_args: List[Any] = None,
                                     task_kwargs: Dict[str, Any] = None,
                                     failed_items: List[Any] = None,
-                                    error_result_factory: Callable = None) -> Dict[str, Any]:
+                                    error_result_factory: Callable = None,
+                                    result_callback: Callable = None) -> Dict[str, Any]:
         """
         Execute tasks in parallel with result collection (like all_run).
-        
+
         Args:
             task_func: The function to execute for each item (e.g., th_run)
             items: List of items to process (e.g., list of IDs)
@@ -129,7 +130,9 @@ class ParallelExecutor:
             task_kwargs: Additional keyword arguments to pass to task_func
             failed_items: List of items that failed in previous phase
             error_result_factory: Function to create error results for failed items
-            
+            result_callback: Optional callback function to call for each completed result.
+                           Should accept (item_id, result) as arguments for incremental saving.
+
         Returns:
             Dictionary mapping items to their results
         """
@@ -161,12 +164,15 @@ class ParallelExecutor:
                 error_result = error_result_factory(item)
                 result_queue.put({item: error_result})
 
-        # Handle timeout and completion
-        self._wait_for_completion(task_queue, len(successful_items))
-        
-        # Collect results
-        results = self._collect_results(result_queue, len(items))
-        
+        # Handle timeout and completion, with incremental result saving
+        if result_callback:
+            # Monitor result queue and save incrementally while waiting
+            results = self._wait_and_collect_incrementally(task_queue, result_queue, len(successful_items), len(items), result_callback)
+        else:
+            # Original behavior: wait then collect
+            self._wait_for_completion(task_queue, len(successful_items))
+            results = self._collect_results(result_queue, len(items), result_callback)
+
         print(f"=== {self.phase_name} Phase Complete ===\n")
         return results
     
@@ -207,6 +213,93 @@ class ParallelExecutor:
         print(f"=== {self.phase_name} Phase Complete ===\n")
         return results
     
+    def _wait_and_collect_incrementally(self, task_queue: TaskQueue, result_queue: queue.Queue,
+                                        expected_tasks: int, expected_results: int,
+                                        result_callback: Callable) -> Dict[str, Any]:
+        """
+        Wait for tasks to complete while monitoring and saving results incrementally.
+
+        Args:
+            task_queue: Queue of tasks being processed
+            result_queue: Queue where results are placed
+            expected_tasks: Number of tasks expected to complete
+            expected_results: Number of results expected (including failed items)
+            result_callback: Callback to call for each result as it arrives
+
+        Returns:
+            Dictionary of all collected results
+        """
+        results = {}
+        results_collected = 0
+
+        # If QUEUE_TIMEOUT is None, we still need to monitor results
+        if QUEUE_TIMEOUT is None:
+            # Continuously check for results while tasks are running
+            while results_collected < expected_results or task_queue.unfinished_tasks > 0:
+                try:
+                    # Try to get a result with a short timeout
+                    result_item = result_queue.get(timeout=0.1)
+
+                    # Process the result
+                    if isinstance(result_item, dict):
+                        for key, value in result_item.items():
+                            results[key] = value
+                            results_collected += 1
+                            # Call callback immediately for incremental saving
+                            result_callback(key, value)
+                    else:
+                        logging.warning(f"Unexpected result format: {result_item}")
+                        results_collected += 1
+
+                except queue.Empty:
+                    # No result available yet, continue waiting
+                    if task_queue.unfinished_tasks == 0 and results_collected >= expected_results:
+                        # All tasks done and all results collected
+                        break
+                    continue
+        else:
+            # Handle with timeout
+            start_time = time.time()
+
+            while results_collected < expected_results:
+                # Check if we've reached the timeout
+                if time.time() - start_time > QUEUE_TIMEOUT:
+                    print(f"Queue timeout after {QUEUE_TIMEOUT}s. {expected_results - results_collected} results not collected.")
+                    break
+
+                try:
+                    # Try to get a result with a short timeout
+                    result_item = result_queue.get(timeout=0.1)
+
+                    # Process the result
+                    if isinstance(result_item, dict):
+                        for key, value in result_item.items():
+                            results[key] = value
+                            results_collected += 1
+                            # Call callback immediately for incremental saving
+                            result_callback(key, value)
+                    else:
+                        logging.warning(f"Unexpected result format: {result_item}")
+                        results_collected += 1
+
+                except queue.Empty:
+                    # No result available yet, check if tasks are still running
+                    if task_queue.unfinished_tasks == 0 and results_collected >= expected_results:
+                        # All tasks done and all results collected
+                        break
+                    continue
+
+        # Verify completion
+        if task_queue.unfinished_tasks > 0:
+            print(f"WARNING: {task_queue.unfinished_tasks} {self.phase_name.lower()} tasks did not complete successfully")
+        else:
+            print(f"All {self.phase_name.lower()} tasks completed successfully")
+
+        if results_collected < expected_results:
+            print(f"Warning: Expected {expected_results} results but only got {results_collected}")
+
+        return results
+
     def _wait_for_completion(self, task_queue: TaskQueue, expected_tasks: int) -> None:
         """
         Wait for all tasks to complete, handling timeouts appropriately.
@@ -239,9 +332,14 @@ class ParallelExecutor:
         else:
             print(f"All {self.phase_name.lower()} tasks completed successfully")
     
-    def _collect_results(self, result_queue: queue.Queue, expected_results: int) -> Dict[str, Any]:
+    def _collect_results(self, result_queue: queue.Queue, expected_results: int, result_callback: Callable = None) -> Dict[str, Any]:
         """
-        Collect results from the result queue.
+        Collect results from the result queue, optionally calling a callback for each result.
+
+        Args:
+            result_queue: Queue containing results
+            expected_results: Number of results expected
+            result_callback: Optional callback to call for each result (for incremental saving)
         """
         # Get results from the result queue - handle timeout case
         if QUEUE_TIMEOUT is not None:
@@ -249,7 +347,7 @@ class ParallelExecutor:
             available_results = result_queue.qsize()
             if available_results < expected_results:
                 print(f"Warning: Expected {expected_results} results but only got {available_results}")
-            
+
             # Get available results
             results_list = []
             for _ in range(available_results):
@@ -261,14 +359,17 @@ class ParallelExecutor:
             # Get all results from the result queue
             results_list = [result_queue.get() for _ in range(expected_results)]
 
-        # Format to Dictionary
+        # Format to Dictionary and call callback for each result
         results = {}
         for result_item in results_list:
             if isinstance(result_item, dict):
                 for key, value in result_item.items():
                     results[key] = value
+                    # Call callback for incremental saving
+                    if result_callback:
+                        result_callback(key, value)
             else:
                 # Handle unexpected result format
                 logging.warning(f"Unexpected result format: {result_item}")
-                
+
         return results 

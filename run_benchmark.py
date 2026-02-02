@@ -52,60 +52,137 @@ class CopilotBenchmark(wrapper.CopilotWrapper):
     def benchmark(self, runs_file = None):
         raw_result_path = os.path.join(self.repo.prefix, "raw_result.json")
         report_path = os.path.join(self.repo.prefix, "report.json")
-        
-        # If raw_result.json exists, load it instead of rerunning tests
+
+        # Load existing results if they exist for resume functionality
+        existing_results = {}
         if os.path.exists(raw_result_path):
-            print(f"Using existing raw_result.json from {raw_result_path}")
+            print(f"Found existing raw_result.json at {raw_result_path}")
             with open(raw_result_path, 'r') as f:
-                res = json.load(f)
-        else:
-            if runs_file is None:
-                self.repo.process_json()
-                
-                # If refinement is enabled, run it before preparation
-                if hasattr(self.repo, 'refine_model') and self.repo.refine_model:
-                    print(f"Refining datapoints using model: {self.repo.refine_model}")
-                    refine_results = self.repo.all_refine(model_factory=self.factory)
-                    print(f"Refinement completed: {refine_results['refined']} datapoints refined")
-                    sys.stdout.flush()
+                existing_results = json.load(f)
+            print(f"Loaded {len(existing_results)} existing results")
 
-                # Prepare all repositories
-                self.repo.all_prepare(self.model)
+        if runs_file is None:
+            self.repo.process_json()
 
-                # Skip evaluation for models that don't require it (e.g., local_export)
-                if hasattr(self.model, 'requires_evaluation') and not self.model.requires_evaluation:
-                    print("Skipping evaluation - model does not require harness execution (export mode)")
-                    res = {}  # Return empty results for export mode
-                else:
-                    # Run all tests
-                    res = self.repo.all_run(self.model)
-            else:
-                with open (runs_file, 'r+') as runs_f:
-                    runs = runs_f.readlines()
+            # Filter out already-completed problems for resume functionality
+            if existing_results:
+                original_count = len(self.repo.context)
+                # Remove already-completed problems from the context
+                remaining_problems = {k: v for k, v in self.repo.context.items() if k not in existing_results}
+                self.repo.context = remaining_problems
+                skipped_count = original_count - len(remaining_problems)
+                print(f"Resume mode: Skipping {skipped_count} already-completed problems")
+                print(f"Remaining problems to run: {len(remaining_problems)}")
 
-                # Replicate repositories
-                for run in runs:
-                    # From String to Dictionary
-                    cxt = json.loads(run)
-                    id  = list(cxt.keys())[0]
-                    vlt = list(cxt.values())[0]
+                # If all problems are already completed, return existing results
+                if not remaining_problems:
+                    print("All problems already completed. Returning existing results.")
+                    return existing_results
 
-                    (obj, repo)         = self.repo.set_repo(id=id, context=vlt)
-                    self.repo.runs [id] = {'obj' : obj, 'repo' : repo, 'input' : vlt ['input'], 'output' : vlt ['output']}
+            # If refinement is enabled, run it before preparation
+            if hasattr(self.repo, 'refine_model') and self.repo.refine_model:
+                print(f"Refining datapoints using model: {self.repo.refine_model}")
+                refine_results = self.repo.all_refine(model_factory=self.factory)
+                print(f"Refinement completed: {refine_results['refined']} datapoints refined")
+                sys.stdout.flush()
 
-                res = self.repo.all_run(self.model)
+            # Prepare all repositories (only for remaining problems)
+            self.repo.all_prepare(self.model)
 
-            # Create prefix directory if it doesn't exist
-            os.makedirs(self.repo.prefix, exist_ok=True)
-            
-            # Only write results to file if the model requires evaluation
-            # (e.g., skip for local_export mode which only generates prompts)
+            # Skip evaluation for models that don't require it (e.g., local_export)
             if hasattr(self.model, 'requires_evaluation') and not self.model.requires_evaluation:
-                print("Skipping raw_result.json creation - model does not require harness execution (export mode)")
+                print("Skipping evaluation - model does not require harness execution (export mode)")
+                new_results = {}  # Return empty results for export mode
             else:
-                # Write results to prefix directory
-                with open(raw_result_path, "w+") as f:
-                    f.write(json.dumps(res))
+                # Create callback for incremental saving of results
+                import threading
+                result_lock = threading.Lock()
+
+                def save_result_incrementally(problem_id, result):
+                    """Save each result to raw_result.json as it completes"""
+                    with result_lock:
+                        # Load existing results
+                        current_results = {}
+                        if os.path.exists(raw_result_path):
+                            try:
+                                with open(raw_result_path, 'r') as f:
+                                    current_results = json.load(f)
+                            except (json.JSONDecodeError, IOError):
+                                pass
+
+                        # Add new result
+                        current_results[problem_id] = result
+
+                        # Write back to file atomically
+                        temp_path = raw_result_path + '.tmp'
+                        with open(temp_path, 'w') as f:
+                            json.dump(current_results, f, indent=2)
+                        os.replace(temp_path, raw_result_path)
+                        print(f"✓ Saved result for {problem_id} ({len(current_results)} total)")
+
+                # Run tests for remaining problems with incremental saving
+                new_results = self.repo.all_run(self.model, result_callback=save_result_incrementally)
+
+            # Merge new results with existing results
+            res = {**existing_results, **new_results}
+
+        else:
+            with open (runs_file, 'r+') as runs_f:
+                runs = runs_f.readlines()
+
+            # Replicate repositories
+            for run in runs:
+                # From String to Dictionary
+                cxt = json.loads(run)
+                id  = list(cxt.keys())[0]
+                vlt = list(cxt.values())[0]
+
+                (obj, repo)         = self.repo.set_repo(id=id, context=vlt)
+                self.repo.runs [id] = {'obj' : obj, 'repo' : repo, 'input' : vlt ['input'], 'output' : vlt ['output']}
+
+            # Create callback for incremental saving of results
+            import threading
+            result_lock = threading.Lock()
+
+            def save_result_incrementally(problem_id, result):
+                """Save each result to raw_result.json as it completes"""
+                with result_lock:
+                    # Load existing results
+                    current_results = {}
+                    if os.path.exists(raw_result_path):
+                        try:
+                            with open(raw_result_path, 'r') as f:
+                                current_results = json.load(f)
+                        except (json.JSONDecodeError, IOError):
+                            pass
+
+                    # Add new result
+                    current_results[problem_id] = result
+
+                    # Write back to file atomically
+                    temp_path = raw_result_path + '.tmp'
+                    with open(temp_path, 'w') as f:
+                        json.dump(current_results, f, indent=2)
+                    os.replace(temp_path, raw_result_path)
+                    print(f"✓ Saved result for {problem_id} ({len(current_results)} total)")
+
+            new_results = self.repo.all_run(self.model, result_callback=save_result_incrementally)
+
+            # Merge with existing results
+            res = {**existing_results, **new_results}
+
+        # Create prefix directory if it doesn't exist
+        os.makedirs(self.repo.prefix, exist_ok=True)
+
+        # Only write results to file if the model requires evaluation
+        # (e.g., skip for local_export mode which only generates prompts)
+        if hasattr(self.model, 'requires_evaluation') and not self.model.requires_evaluation:
+            print("Skipping raw_result.json creation - model does not require harness execution (export mode)")
+        else:
+            # Write final merged results to prefix directory
+            with open(raw_result_path, "w+") as f:
+                f.write(json.dumps(res, indent=2))
+            print(f"\n=== Final: Saved {len(res)} total results to {raw_result_path} ===")
 
         return res
 
@@ -113,24 +190,31 @@ class CopilotBenchmark(wrapper.CopilotWrapper):
         """Execute a single issue - similar to harness functionality."""
         raw_result_path = os.path.join(self.repo.prefix, "raw_result.json")
         report_path = os.path.join(self.repo.prefix, "report.json")
-        
+
         # Create directories if they don't exist
         os.makedirs(self.repo.prefix, exist_ok=True)
+
+        # Load existing results if they exist
+        existing_results = {}
+        if os.path.exists(raw_result_path):
+            with open(raw_result_path, 'r') as f:
+                existing_results = json.load(f)
 
         # Check if we're using --regenerate-report flag only
         if hasattr(self, 'regenerate_report_only') and self.regenerate_report_only:
             # In this case, we should load from raw_result.json
-            if os.path.exists(raw_result_path):
-                print(f"Using existing raw_result.json from {raw_result_path} due to --regenerate-report flag")
-                with open(raw_result_path, 'r') as f:
-                    all_results = json.load(f)
-                    if issue in all_results:
-                        print(f"Found result for issue {issue} in raw_result.json")
-                        return all_results[issue]
-                    else:
-                        raise Exception(f"Issue {issue} not found in existing raw_result.json")
-        
-        # Always process the issue, even if it exists in raw_result.json
+            if issue in existing_results:
+                print(f"Found result for issue {issue} in raw_result.json")
+                return existing_results[issue]
+            else:
+                raise Exception(f"Issue {issue} not found in existing raw_result.json")
+
+        # Check if issue already exists in results (resume functionality)
+        if issue in existing_results:
+            print(f"Issue {issue} already completed. Skipping execution (delete raw_result.json to re-run).")
+            return existing_results[issue]
+
+        # Process the issue
         if runs_file is None:
             self.repo.process_json()
             
@@ -219,24 +303,31 @@ class AgenticBenchmark(wrapper.AgenticWrapper):
         """Execute a single issue - similar to harness functionality for agentic mode."""
         raw_result_path = os.path.join(self.repo.prefix, "raw_result.json")
         report_path = os.path.join(self.repo.prefix, "report.json")
-        
+
         # Create directories if they don't exist
         os.makedirs(self.repo.prefix, exist_ok=True)
+
+        # Load existing results if they exist
+        existing_results = {}
+        if os.path.exists(raw_result_path):
+            with open(raw_result_path, 'r') as f:
+                existing_results = json.load(f)
 
         # Check if we're using --regenerate-report flag only
         if hasattr(self, 'regenerate_report_only') and self.regenerate_report_only:
             # In this case, we should load from raw_result.json
-            if os.path.exists(raw_result_path):
-                print(f"Using existing raw_result.json from {raw_result_path} due to --regenerate-report flag")
-                with open(raw_result_path, 'r') as f:
-                    all_results = json.load(f)
-                    if issue in all_results:
-                        print(f"Found result for issue {issue} in raw_result.json")
-                        return all_results[issue]
-                    else:
-                        raise Exception(f"Issue {issue} not found in existing raw_result.json")
-        
-        # Always process the issue, even if it exists in raw_result.json
+            if issue in existing_results:
+                print(f"Found result for issue {issue} in raw_result.json")
+                return existing_results[issue]
+            else:
+                raise Exception(f"Issue {issue} not found in existing raw_result.json")
+
+        # Check if issue already exists in results (resume functionality)
+        if issue in existing_results:
+            print(f"Issue {issue} already completed. Skipping execution (delete raw_result.json to re-run).")
+            return existing_results[issue]
+
+        # Process the issue
         if runs_file is None:
             self.repo.process_json()
             

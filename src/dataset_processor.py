@@ -438,11 +438,22 @@ When generating files, return the file name in the correct place at the folder s
         from src import commercial_eda
         datapoint = self.context.get(id, {})
         requires_eda_license = commercial_eda.datapoint_requires_eda_license(datapoint)
-        
-        repo = repository.Repository(name, issue, self.files [id], harness['files'] if harness and 'files' in harness else harness, patches, host=self.host, sbj_llm_model=self.sbj_llm_model, network_name=getattr(self, 'network_name', None), manage_network=getattr(self, 'manage_network', True), requires_eda_license=requires_eda_license)
-        
+
+        # Only pass subjective model if this category actually needs it (categories 9 and 10)
+        sbj_model = None
+        if 'categories' in self.context[id] and self.context[id]['categories']:
+            try:
+                cat = int(self.context[id]['categories'][0][3:])
+                # Only categories 9 and 10 need subjective scoring
+                if cat in [9, 10]:
+                    sbj_model = self.sbj_llm_model
+            except (ValueError, IndexError, KeyError):
+                pass  # If category parsing fails, just don't use subjective model
+
+        repo = repository.Repository(name, issue, self.files [id], harness['files'] if harness and 'files' in harness else harness, patches, host=self.host, sbj_llm_model=sbj_model, network_name=getattr(self, 'network_name', None), manage_network=getattr(self, 'manage_network', True), requires_eda_license=requires_eda_license)
+
         # Network configuration is now passed during construction, no need to set it after
-        
+
         return (harness != None and harness != {}, repo)
 
     def get_context_for_repo(self, id, model):
@@ -1011,16 +1022,16 @@ When generating files, return the file name in the correct place at the folder s
         return result
 
 
-    def all_run(self, model : OpenAI_Instance = None):
+    def all_run(self, model : OpenAI_Instance = None, result_callback=None):
         from .parallel_executor import ParallelExecutor
-        
+
         # Verify preparation is complete
         if not self.runs:
             raise RuntimeError("Cannot start execution phase: Preparation phase has not been completed")
-            
+
         # Check if any tasks failed during preparation
         failed_prep = [id for id, run in self.runs.items() if 'error_msg' in run]
-        
+
         def create_error_result(id):
             """Create error result for failed preparation tasks"""
             category = self.context[id]['categories'][0]
@@ -1031,16 +1042,17 @@ When generating files, return the file name in the correct place at the folder s
                 "tests": [{"result": 1, "log": None, "error_msg": self.runs[id]['error_msg'], "execution": 0.0}],
                 "errors": 1
             }
-        
+
         executor = ParallelExecutor(num_workers=self.threads, phase_name="Execution")
         result = executor.execute_parallel_with_results(
             task_func=self.th_run,
             items=list(self.context.keys()),
             task_args=[model],  # Note: result_queue will be inserted as second arg by executor
             failed_items=failed_prep,
-            error_result_factory=create_error_result
+            error_result_factory=create_error_result,
+            result_callback=result_callback  # Pass callback for incremental saving
         )
-        
+
         return result
 
 class CopilotProcessor (DatasetProcessor):
@@ -1157,9 +1169,68 @@ class CopilotProcessor (DatasetProcessor):
                 logging.error(f"Failed to create directories for {id}: {str(e)}")
                 raise
 
+            # Check if preparation already completed (resume support)
+            logfile = os.path.join(issue_dir, "prompts", f"{issue}.md")
+            harness_dir = os.path.join(issue_dir, "harness", str(issue))
+
+            # Try to load from existing files first (resume mode)
+            if os.path.exists(logfile) and os.path.exists(harness_dir):
+                print(f"✓ Found existing files for {id}, attempting to load from disk (resume mode)...")
+
+                # Read all generated files from the harness directory
+                loaded_files = {}
+                for root, dirs, disk_files in os.walk(harness_dir):
+                    for filename in disk_files:
+                        # Only load code files (skip logs, reports, etc.)
+                        if filename.endswith(('.v', '.sv', '.txt', '.json', '.c', '.cpp', '.h', '.hpp')):
+                            file_path = os.path.join(root, filename)
+                            # Get relative path from harness_dir
+                            rel_path = os.path.relpath(file_path, harness_dir)
+                            try:
+                                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                                    content = f.read()
+                                    loaded_files[rel_path] = content
+                            except Exception as e:
+                                logging.warning(f"Failed to read {file_path}: {e}")
+
+                # If we successfully loaded files, use them instead of calling LLM
+                if loaded_files:
+                    print(f"  Loaded {len(loaded_files)} file(s) from disk, skipping LLM call")
+                    # Map the loaded files to the expected result format
+                    # The result dict should map expected filenames to their content
+                    for expected_file in files:
+                        # Try to find matching file in loaded files
+                        # Files might be in subdirectories like "rtl/file.sv"
+                        found = False
+                        for disk_file, content in loaded_files.items():
+                            # Check if the disk file ends with the expected filename
+                            if disk_file.endswith(expected_file) or os.path.basename(disk_file) == expected_file:
+                                result[expected_file] = content
+                                found = True
+                                break
+
+                        if not found:
+                            # If not found by exact match, try to find any file with similar name
+                            for disk_file, content in loaded_files.items():
+                                if expected_file.replace('.', '_') in disk_file or os.path.splitext(expected_file)[0] in disk_file:
+                                    result[expected_file] = content
+                                    found = True
+                                    break
+
+                        if not found:
+                            logging.warning(f"Expected file {expected_file} not found in loaded files for {id}")
+
+                    # If we successfully populated the result, skip the LLM call
+                    if result:
+                        print(f"  Successfully reconstructed result from {len(result)} file(s)")
+                        return result
+                    else:
+                        print(f"  Could not reconstruct result from disk files, will call LLM")
+                else:
+                    print(f"  No valid files found on disk, will call LLM")
+
             llm_retry_count = LLM_RETRY_COUNT
             while 1:
-                logfile = os.path.join(issue_dir, "prompts", f"{issue}.md")
                 os.makedirs(os.path.dirname(logfile), exist_ok=True)
                 print(f"Requesting valid response to model...")
 
@@ -1784,9 +1855,9 @@ class AgenticProcessor (DatasetProcessor):
         try:
             # Run the shell script and redirect output to logfile
             print(f"Executing agent script: {script_path}")
-            
+
             # Define kill command for monitoring
-            kill_cmd = f"docker compose -f {docker_compose_path} -p {project_name} kill agent"
+            kill_cmd = f"docker-compose -f {docker_compose_path} -p {project_name} kill agent"
             
             # Execute the script in a subprocess
             with open(logfile, 'w') as log_file:
@@ -1966,9 +2037,9 @@ class AgenticProcessor (DatasetProcessor):
             script_file.write(f"GROUP_ID=$(id -g)\n\n")
             script_file.write(f"if [ \"$DEBUG_MODE\" = true ]; then\n")
             script_file.write(f"  echo \"DEBUG MODE: Starting container with bash entrypoint\"\n")
-            script_file.write(f"  docker compose -f {docker_compose_path} -p {project_name} run --rm --user $USER_ID:$GROUP_ID --entrypoint bash agent\n")
+            script_file.write(f"  docker-compose -f {docker_compose_path} -p {project_name} run --rm --user $USER_ID:$GROUP_ID --entrypoint bash agent\n")
             script_file.write(f"else\n")
-            script_file.write(f"  docker compose -f {docker_compose_path} -p {project_name} run --rm --user $USER_ID:$GROUP_ID agent\n")
+            script_file.write(f"  docker-compose -f {docker_compose_path} -p {project_name} run --rm --user $USER_ID:$GROUP_ID agent\n")
             script_file.write(f"fi\n")
             script_file.write(f"exit_code=$?\n\n")
             script_file.write(f"# Exit with the same code as the docker command\n")

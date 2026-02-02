@@ -45,19 +45,23 @@ def kill_process_tree(pid):
 def apply_template_substitution(content: str) -> str:
     """
     Apply template variable substitution for EDA tool infrastructure.
-    
+
     Replaces placeholders in the format __VARIABLE__ with configured values:
     - __VERIF_EDA_IMAGE__ -> VERIF_EDA_IMAGE config value
-    - __LICENSE_NETWORK__ -> LICENSE_NETWORK config value  
+    - __LICENSE_NETWORK__ -> LICENSE_NETWORK config value
     - __OSS_SIM_IMAGE__ -> OSS_SIM_IMAGE config value
     - __OSS_PNR_IMAGE__ -> OSS_PNR_IMAGE config value
-    
+
     Args:
         content: String content with potential template variables
-        
+
     Returns:
         String with template variables substituted
     """
+    # Return None as-is if content is None
+    if content is None:
+        return None
+
     # Define template mappings
     substitutions = {
         '__VERIF_EDA_IMAGE__': config.get('VERIF_EDA_IMAGE'),
@@ -65,12 +69,12 @@ def apply_template_substitution(content: str) -> str:
         '__OSS_SIM_IMAGE__': config.get('OSS_SIM_IMAGE'),
         '__OSS_PNR_IMAGE__': config.get('OSS_PNR_IMAGE')
     }
-    
+
     # Apply substitutions for any placeholders found
     for placeholder, value in substitutions.items():
         if value and placeholder in content:
             content = content.replace(placeholder, value)
-    
+
     return content
 
 
@@ -226,7 +230,36 @@ class Repository:
 
             # Apply centralized template substitution for EDA infrastructure
             content = apply_template_substitution(content)
-            
+
+            # Skip processing if content is None
+            if content is None:
+                continue
+
+            # Fix cocotb version in Dockerfiles to ensure cocotb.runner is available
+            if file == 'Dockerfile' and 'pip install cocotb-bus' in content:
+                content = content.replace('RUN pip install cocotb-bus', 'RUN pip install --upgrade cocotb cocotb-bus')
+
+            # Fix cocotb import path for cocotb 2.x (cocotb.runner -> cocotb_tools.runner)
+            if file.endswith('test_runner.py') and 'from cocotb.runner import' in content:
+                content = content.replace('from cocotb.runner import', 'from cocotb_tools.runner import')
+
+            # Fix cocotb 2.x packed array indexing in test files (dut.signal[n] -> bit extraction from value)
+            if file.endswith('test_lfsr.py') and 'int(dut.lfsr_out[6])' in content:
+                # Replace the problematic indexing pattern with cocotb 2.x compatible code
+                old_pattern = """        if (i == 0):
+            q1 = int(dut.lfsr_out[6]) ^ int(dut.lfsr_out[0])
+            q2 = int(dut.lfsr_out[5]) ^ int(dut.lfsr_out[0])
+            q3 = int(dut.lfsr_out[1]) ^ int(dut.lfsr_out[0])
+            lfsr_out =  (int(dut.lfsr_out[0]) << 7) | (int(dut.lfsr_out[7]) << 6) | (q1 << 5) | (q2 << 4) | (int(dut.lfsr_out[4]) << 3) | (int(dut.lfsr_out[3]) << 2) | (int(dut.lfsr_out[2]) << 1) | q3"""
+                new_pattern = """        if (i == 0):
+            # Read the whole value first for cocotb 2.x compatibility
+            val = int(dut.lfsr_out.value)
+            q1 = ((val >> 6) & 1) ^ (val & 1)
+            q2 = ((val >> 5) & 1) ^ (val & 1)
+            q3 = ((val >> 1) & 1) ^ (val & 1)
+            lfsr_out =  ((val & 1) << 7) | (((val >> 7) & 1) << 6) | (q1 << 5) | (q2 << 4) | (((val >> 4) & 1) << 3) | (((val >> 3) & 1) << 2) | (((val >> 2) & 1) << 1) | q3"""
+                content = content.replace(old_pattern, new_pattern)
+
             # Add license network configuration for commercial EDA datapoints
             if self.requires_eda_license and file.endswith('docker-compose.yml'):
                 license_network_name = config.get('LICENSE_NETWORK')
@@ -394,8 +427,8 @@ class Repository:
         project_prefix = "_".join(project_name.split("_")[:-1])
 
         # Create the docker command with project name
-        # line_cmd = f"docker compose -f {docker} -p {project_name} run {cmd} {service}"
-        kill_cmd = f"docker compose -f {docker} -p {project_name} kill {service}"
+        # line_cmd = f"docker-compose -f {docker} -p {project_name} run {cmd} {service}"
+        kill_cmd = f"docker-compose -f {docker} -p {project_name} kill {service}"
         
         # Save the command with absolute paths to a shell script
         # Get the directory where the docker-compose file is located
@@ -433,7 +466,7 @@ class Repository:
             script_file.write(f"# Function to clean up resources\n")
             script_file.write(f"cleanup() {{\n")
             script_file.write(f"  echo \"Cleaning up Docker resources...\"\n")
-            script_file.write(f"  docker compose -f {docker} -p {project_name} kill {service} 2>/dev/null || true\n")
+            script_file.write(f"  docker-compose -f {docker} -p {project_name} kill {service} 2>/dev/null || true\n")
             
             # Cleanup image
             script_file.write(f"  docker rmi {project_name}-{service} 2>/dev/null || true\n")
@@ -460,9 +493,9 @@ class Repository:
             script_file.write(f"GROUP_ID=$(id -g)\n\n")
             script_file.write(f"if [ \"$DEBUG_MODE\" = true ]; then\n")
             script_file.write(f"  echo \"DEBUG MODE: Starting container with bash entrypoint\"\n")
-            script_file.write(f"  docker compose -f {docker} -p {project_name} run --rm --user $USER_ID:$GROUP_ID -e HOME=/code/rundir --entrypoint bash {cmd} {service}\n")
+            script_file.write(f"  docker-compose -f {docker} -p {project_name} run --rm --user $USER_ID:$GROUP_ID -e HOME=/code/rundir --entrypoint bash {cmd} {service}\n")
             script_file.write(f"else\n")
-            script_file.write(f"  docker compose -f {docker} -p {project_name} run --rm --user $USER_ID:$GROUP_ID -e HOME=/code/rundir {cmd} {service}\n")
+            script_file.write(f"  docker-compose -f {docker} -p {project_name} run --rm --user $USER_ID:$GROUP_ID -e HOME=/code/rundir {cmd} {service}\n")
             script_file.write(f"fi\n")
             script_file.write(f"exit_code=$?\n\n")
             script_file.write(f"# Exit with the same code as the docker command\n")
@@ -789,9 +822,9 @@ class Repository:
             script_file.write(f"GROUP_ID=$(id -g)\n\n")
             script_file.write(f"if [ \"$DEBUG_MODE\" = true ]; then\n")
             script_file.write(f"  echo \"DEBUG MODE: Starting container with bash entrypoint\"\n")
-            script_file.write(f"  docker compose -f {docker_compose_path} -p {project_name} run --rm --user $USER_ID:$GROUP_ID --entrypoint bash agent\n")
+            script_file.write(f"  docker-compose -f {docker_compose_path} -p {project_name} run --rm --user $USER_ID:$GROUP_ID --entrypoint bash agent\n")
             script_file.write(f"else\n")
-            script_file.write(f"  docker compose -f {docker_compose_path} -p {project_name} run --rm --user $USER_ID:$GROUP_ID agent\n")
+            script_file.write(f"  docker-compose -f {docker_compose_path} -p {project_name} run --rm --user $USER_ID:$GROUP_ID agent\n")
             script_file.write(f"fi\n")
             script_file.write(f"exit_code=$?\n\n")
             script_file.write(f"# Exit with the same code as the docker command\n")
@@ -829,8 +862,8 @@ class Repository:
         logfile = ""
 
         try:
-            # LLM-based subjective scoring if model is provided and it is LLM subjective categories
-            if self.sbj_llm_model and category not in BLEU_SCORING_CATEGORIES:
+            # LLM-based subjective scoring if model is provided and it is LLM subjective categories (9, 10)
+            if self.sbj_llm_model and LLM_SUBJECTIVE_CATEGORIES and category in LLM_SUBJECTIVE_CATEGORIES:
                 # Run LLM-based subjective scoring
                 llm_score = self.subjective_score(response, reference, problem_prompt)
                 llm_time = time.time()
@@ -865,8 +898,8 @@ class Repository:
                     with open(f"{logfile}_bleu.txt", 'w+') as out:
                         out.write(res + f"\n\nScore : {bleu}\n")
                     
-                # Store BLEU score in result for BLEU scoring categories
-                if category in BLEU_SCORING_CATEGORIES:
+                # Store BLEU score in result for BLEU scoring categories (6, 8)
+                if BLEU_SCORING_CATEGORIES and category in BLEU_SCORING_CATEGORIES:
                     result.append({"result": err, "log": f"{logfile}_rouge.txt", "error_msg": None, "execution": rouge_time - start_time})
                     result.append({"result": err, "log": f"{logfile}_bleu.txt", "error_msg": None, "execution": bleu_time - rouge_time, "bleu_score": bleu})
                 else:

@@ -279,7 +279,7 @@ def run_samples(args: argparse.Namespace, n_samples: int, k_threshold: int) -> N
             os.makedirs(sample_prefix, exist_ok=True)
         
         # Build command with the same args but a unique prefix
-        cmd = ["python", script_name]
+        cmd = [sys.executable, script_name]
         
         # Track if we've already added the regenerate flag
         regenerate_flag_added = False

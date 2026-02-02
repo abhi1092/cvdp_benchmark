@@ -234,16 +234,16 @@ def run_samples(args: argparse.Namespace, n_samples: int, k_threshold: int) -> N
         print("Will run full benchmarks for all samples.")
         regenerate_only = False
     
-    # Setup shared Docker network for all samples if not just regenerating reports
+    # Setup shared container network for all samples if not just regenerating reports
     shared_network_name = None
     license_network_auto_created = False  # Track if we auto-create the license network
     if not regenerate_only:
         # Clean up filename to ensure consistent network naming
         filename = args.filename.replace('"', "").replace("'", "")
-        
+
         # Generate a network name based on the dataset file for the default network
         shared_network_name = network_util.generate_network_name(filename, shared=True)
-        print(f"Using shared Docker network for all samples: {shared_network_name}")
+        print(f"Using shared container network for all samples: {shared_network_name}")
         
         # Commercial EDA datasets will have an additional license network (handled separately)
         if eda_validation['required']:
@@ -257,14 +257,14 @@ def run_samples(args: argparse.Namespace, n_samples: int, k_threshold: int) -> N
         if network_util.create_docker_network(shared_network_name):
             # Register cleanup function to remove the network on exit
             def cleanup_network():
-                print(f"Cleaning up shared Docker network: {shared_network_name}")
+                print(f"Cleaning up shared container network: {shared_network_name}")
                 network_util.remove_docker_network(shared_network_name)
-            
+
             atexit.register(cleanup_network)
             # Mark that we've registered a network cleanup handler
             setattr(atexit, "_network_cleanup_registered", True)
         else:
-            print(f"Failed to create shared Docker network, each sample will create its own network")
+            print(f"Failed to create shared container network, each sample will create its own network")
             shared_network_name = None
     
     for i in range(n_samples):

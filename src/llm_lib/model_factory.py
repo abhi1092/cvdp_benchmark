@@ -12,6 +12,7 @@ from .openai_llm import OpenAI_Instance
 from .openai_llm_responses import OpenAI_Responses_Instance
 from .subjective_score_model import SubjectiveScoreModel_Instance
 from .local_inference_model import LocalInferenceModel
+from .vllm_llm import VLLM_Instance
 
 logging.basicConfig(level=logging.INFO)
 
@@ -45,6 +46,9 @@ class ModelFactory:
             # Local inference models
             "local_export": self._create_local_export_instance,
             "local_import": self._create_local_import_instance,
+
+            # vLLM models
+            "vllm": self._create_vllm_instance,
         }
 
     def create_model(self, model_name: str, context: Any = None, key: Optional[str] = None, **kwargs) -> Any:
@@ -121,6 +125,11 @@ class ModelFactory:
         """Create a Local Import model instance"""
         file_path = kwargs.get('file_path', 'responses.jsonl')
         return LocalInferenceModel(context=context, mode='import', file_path=file_path, key=key, model=model_name)
+
+    def _create_vllm_instance(self, model_name: str, context: Any, key: Optional[str], **kwargs) -> VLLM_Instance:
+        """Create a vLLM model instance"""
+        base_url = kwargs.get('base_url', None)
+        return VLLM_Instance(context=context, key=key, model=model_name, base_url=base_url)
 
     def register_model_type(self, model_identifier: str, factory_method):
         """

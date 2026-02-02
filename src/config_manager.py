@@ -126,6 +126,8 @@ class ConfigManager:
                            description="Path to custom model factory implementation")
         
         # Docker and Resource Management
+        self.register_config("CONTAINER_RUNTIME", default="docker", type_cast=str,
+                           description="Container runtime to use (docker or podman)")
         self.register_config("DOCKER_QUOTA_THRESHOLD_MB", default=50, type_cast=int,
                            description="Docker quota threshold in MB")
         self.register_config("DOCKER_QUOTA_CHECK_INTERVAL", default=1, type_cast=int,

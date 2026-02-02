@@ -7,6 +7,7 @@ import hashlib
 import time
 import yaml
 import logging
+from .container_runtime import container_runtime
 
 def generate_network_name(dataset_path, shared=False):
     """
@@ -45,80 +46,84 @@ def generate_network_name(dataset_path, shared=False):
 
 def create_docker_network(network_name):
     """
-    Create a Docker bridge network if it doesn't exist.
-    
+    Create a container bridge network if it doesn't exist.
+
     Args:
         network_name (str): Name of the network to create
-        
+
     Returns:
         bool: True if network was created or already exists, False if creation failed
     """
     try:
+        container_cmd = container_runtime.get_container_command()
+
         # Check if network already exists
         result = subprocess.run(
-            f"docker network ls --filter name=^{network_name}$ --format '{{{{.Name}}}}'",
+            f"{container_cmd} network ls --filter name=^{network_name}$ --format '{{{{.Name}}}}'",
             shell=True, capture_output=True, text=True
         )
-        
+
         if result.stdout.strip() == network_name:
-            print(f"Docker network '{network_name}' already exists")
+            print(f"Container network '{network_name}' already exists")
             return True
-            
+
         # Create the network if it doesn't exist
-        print(f"Creating Docker network '{network_name}'")
+        print(f"Creating container network '{network_name}'")
         result = subprocess.run(
-            f"docker network create {network_name} --driver bridge",
+            f"{container_cmd} network create {network_name} --driver bridge",
             shell=True, capture_output=True, text=True
         )
-        
+
         if result.returncode == 0:
-            print(f"Successfully created Docker network '{network_name}'")
+            print(f"Successfully created container network '{network_name}'")
             return True
         else:
-            print(f"Failed to create Docker network '{network_name}': {result.stderr}")
+            print(f"Failed to create container network '{network_name}': {result.stderr}")
             return False
-            
+
     except Exception as e:
-        print(f"Error creating Docker network '{network_name}': {str(e)}")
+        print(f"Error creating container network '{network_name}': {str(e)}")
         return False
 
 def remove_docker_network(network_name):
     """
-    Remove a Docker bridge network if it exists.
-    
+    Remove a container bridge network if it exists.
+
     Args:
         network_name (str): Name of the network to remove
-        
+
     Returns:
         bool: True if network was removed or didn't exist, False if removal failed
     """
     try:
+        container_cmd = container_runtime.get_container_command()
+
         # Check if network exists
         result = subprocess.run(
-            f"docker network ls --filter name=^{network_name}$ --format '{{{{.Name}}}}'",
+            f"{container_cmd} network ls --filter name=^{network_name}$ --format '{{{{.Name}}}}'",
             shell=True, capture_output=True, text=True
         )
-        
+
         if result.stdout.strip() != network_name:
             # Don't print a message when the network doesn't exist to reduce verbosity
             return True
-            
+
         # Remove the network
-        print(f"Removing Docker network '{network_name}'")
+        print(f"Removing container network '{network_name}'")
         result = subprocess.run(
-            f"docker network rm {network_name}",
+            f"{container_cmd} network rm {network_name}",
             shell=True, capture_output=True, text=True
         )
-        
+
         if result.returncode == 0:
-            print(f"Successfully removed Docker network '{network_name}'")
+            print(f"Successfully removed container network '{network_name}'")
             return True
         else:
-            print(f"Failed to remove Docker network '{network_name}': {result.stderr}")
+            print(f"Failed to remove container network '{network_name}': {result.stderr}")
             return False
-            
+
     except Exception as e:
-        print(f"Error removing Docker network '{network_name}': {str(e)}")
+        print(f"Error removing container network '{network_name}': {str(e)}")
         return False
 
 def add_network_to_docker_compose(docker_compose_path, network_name):

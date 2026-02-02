@@ -473,18 +473,18 @@ if __name__ == "__main__":
         print("\nCommercial EDA tool validation failed. Cannot proceed with EDA tool workflows.")
         sys.exit(1)
 
-    # Handle Docker network setup
+    # Handle container network setup
     shared_network_name = None
     license_network_auto_created = False  # Track if we auto-create the license network
     if not args.regenerate_report:
         if args.network_name:
             # Use the specified network name for the default network
             shared_network_name = args.network_name
-            print(f"Using specified Docker network: {shared_network_name}")
+            print(f"Using specified container network: {shared_network_name}")
         else:
             # Auto-generate a network name based on the dataset for the default network
             shared_network_name = network_util.generate_network_name(filename, shared=True)
-            print(f"Generated Docker network name: {shared_network_name}")
+            print(f"Generated container network name: {shared_network_name}")
         
         # Commercial EDA datasets will have an additional license network (handled separately)
         if eda_validation['required']:
@@ -499,12 +499,12 @@ if __name__ == "__main__":
                     license_network_auto_created = True
             else:
                 # For general benchmark networks, create and manage them
-                print("Creating Docker network for all Docker containers in this run...")
+                print("Creating container network for all containers in this run...")
                 network_util.create_docker_network(shared_network_name)
-                
+
                 # Register cleanup function to remove the network on exit
                 def cleanup_network():
-                    print(f"Cleaning up Docker network: {shared_network_name}")
+                    print(f"Cleaning up container network: {shared_network_name}")
                     network_util.remove_docker_network(shared_network_name)
                 
                 # Only register cleanup if we're creating the network

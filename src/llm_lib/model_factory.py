@@ -13,6 +13,7 @@ from .openai_llm_responses import OpenAI_Responses_Instance
 from .subjective_score_model import SubjectiveScoreModel_Instance
 from .local_inference_model import LocalInferenceModel
 from .vllm_llm import VLLM_Instance
+from .vertex_ai_llm import VertexAI_Instance
 
 logging.basicConfig(level=logging.INFO)
 
@@ -49,6 +50,9 @@ class ModelFactory:
 
             # vLLM models
             "vllm": self._create_vllm_instance,
+
+            # Vertex AI models (Claude via GCP)
+            "vertex": self._create_vertex_ai_instance,
         }
 
     def create_model(self, model_name: str, context: Any = None, key: Optional[str] = None, **kwargs) -> Any:
@@ -130,6 +134,10 @@ class ModelFactory:
         """Create a vLLM model instance"""
         base_url = kwargs.get('base_url', None)
         return VLLM_Instance(context=context, key=key, model=model_name, base_url=base_url)
+
+    def _create_vertex_ai_instance(self, model_name: str, context: Any, key: Optional[str], **kwargs) -> VertexAI_Instance:
+        """Create a Vertex AI model instance for Claude models via GCP"""
+        return VertexAI_Instance(context=context, key=key, model=model_name)
 
     def register_model_type(self, model_identifier: str, factory_method):
         """

@@ -112,6 +112,14 @@ class ConfigManager:
                            description="OpenRouter API base URL")
         self.register_config("OPENROUTER_MODEL", required=False,
                            description="Default OpenRouter model to use")
+
+        # Vertex AI Configuration (Claude via GCP)
+        self.register_config("VERTEX_AI_PROJECT", required=False,
+                           description="Google Cloud project ID for Vertex AI")
+        self.register_config("VERTEX_AI_LOCATION", default="us-east5", type_cast=str,
+                           description="GCP region for Vertex AI (default: us-east5)")
+        self.register_config("VERTEX_AI_MODEL", default="claude-sonnet-4@20250514", type_cast=str,
+                           description="Default Vertex AI model to use")
               
         # Application Configuration
         self.register_config("ENABLE_SUBJECTIVE_SCORING", default=False, type_cast=bool,

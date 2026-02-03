@@ -165,12 +165,13 @@ class OpenAI_Responses_Instance:
         try:
             # Use the /responses API
             # Respect request timeout via per-call client options when supported
+            temperature = config.get("MODEL_TEMPERATURE", 0)
             client_for_call = getattr(self.client, 'with_options', lambda **_: self.client)(timeout=timeout)
             resp = client_for_call.responses.create(
                 model=self.model,
                 instructions=system_prompt,
                 input=prompt,
-                # Note: other request options (temperature, etc.) can be added if needed
+                temperature=temperature,
             )
 
             if self.debug:

@@ -164,12 +164,14 @@ class OpenAI_Instance:
 
         try:
             # Create a new chat
+            temperature = config.get("MODEL_TEMPERATURE", 0)
             response = self.chat.chat.completions.create(
                 model    = self.model,
                 messages = [
                     {"role": "system", "content": system_prompt},
                     {"role": "user",   "content": prompt}
                 ],
+                temperature=temperature,
                 timeout=timeout
             )
 

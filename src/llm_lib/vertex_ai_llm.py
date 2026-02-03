@@ -259,13 +259,17 @@ class VertexAI_Instance:
             logging.debug(f"User prompt: {user_prompt}")
 
         # Create a model with system instruction
+        from vertexai.generative_models import GenerationConfig
+
         model = GenerativeModel(
             self.model,
             system_instruction=system_prompt,
         )
 
-        # Generate content
-        response = model.generate_content(user_prompt)
+        # Generate content with configurable temperature
+        temperature = config.get("MODEL_TEMPERATURE", 0)
+        generation_config = GenerationConfig(temperature=temperature)
+        response = model.generate_content(user_prompt, generation_config=generation_config)
 
         # Extract text from response
         return response.text
@@ -291,11 +295,13 @@ class VertexAI_Instance:
         client = PredictionServiceClient(client_options=client_options)
 
         # Build the request payload (Anthropic Messages API format)
+        temperature = config.get("MODEL_TEMPERATURE", 0)
         payload = {
             "anthropic_version": "vertex-2023-10-16",
             "messages": [{"role": "user", "content": user_prompt}],
             "system": system_prompt,
             "max_tokens": max_tokens,
+            "temperature": temperature,
         }
 
         if self.debug:

@@ -86,8 +86,12 @@ class ConfigManager:
     def _setup_default_configs(self) -> None:
         """Setup default configurations found in the existing codebase."""
         # Timeout configurations
-        self.register_config("MODEL_TIMEOUT", default=60, type_cast=int, 
+        self.register_config("MODEL_TIMEOUT", default=60, type_cast=int,
                            description="Timeout for model operations in seconds")
+
+        # Model generation parameters
+        self.register_config("MODEL_TEMPERATURE", default=0, type_cast=float,
+                           description="Temperature for model generation (0=deterministic, 1=creative)")
         self.register_config("TASK_TIMEOUT", default=300, type_cast=int,
                            description="Timeout for task operations in seconds")
         self.register_config("DOCKER_TIMEOUT", default=600, type_cast=int,

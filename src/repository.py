@@ -236,9 +236,18 @@ class Repository:
             if content is None:
                 continue
 
-            # Fix cocotb version in Dockerfiles to ensure cocotb.runner is available
-            if file == 'Dockerfile' and 'pip install cocotb-bus' in content:
-                content = content.replace('RUN pip install cocotb-bus', 'RUN pip install --upgrade cocotb cocotb-bus')
+            # Pin cocotb to 1.9.x to avoid cocotb 2.x API breaks in legacy harnesses
+            if file == 'Dockerfile':
+                if 'pip install cocotb-bus' in content:
+                    content = content.replace(
+                        'RUN pip install cocotb-bus',
+                        'RUN pip install cocotb==1.9.2 cocotb-bus==0.2.1'
+                    )
+                if 'pip3 install cocotb_bus' in content:
+                    content = content.replace(
+                        'RUN pip3 install cocotb_bus',
+                        'RUN pip3 install cocotb==1.9.2 cocotb_bus==0.2.1'
+                    )
 
             # Fix cocotb import path for cocotb 2.x (cocotb.runner -> cocotb_tools.runner)
             if file.endswith('test_runner.py') and 'from cocotb.runner import' in content:

@@ -249,26 +249,26 @@ class Repository:
                         'RUN pip3 install cocotb==1.9.2 cocotb_bus==0.2.1'
                     )
 
-            # Fix cocotb import path for cocotb 2.x (cocotb.runner -> cocotb_tools.runner)
-            if file.endswith('test_runner.py') and 'from cocotb.runner import' in content:
-                content = content.replace('from cocotb.runner import', 'from cocotb_tools.runner import')
+            # # Fix cocotb import path for cocotb 2.x (cocotb.runner -> cocotb_tools.runner)
+            # if file.endswith('test_runner.py') and 'from cocotb.runner import' in content:
+            #     content = content.replace('from cocotb.runner import', 'from cocotb_tools.runner import')
 
-            # Fix cocotb 2.x packed array indexing in test files (dut.signal[n] -> bit extraction from value)
-            if file.endswith('test_lfsr.py') and 'int(dut.lfsr_out[6])' in content:
-                # Replace the problematic indexing pattern with cocotb 2.x compatible code
-                old_pattern = """        if (i == 0):
-            q1 = int(dut.lfsr_out[6]) ^ int(dut.lfsr_out[0])
-            q2 = int(dut.lfsr_out[5]) ^ int(dut.lfsr_out[0])
-            q3 = int(dut.lfsr_out[1]) ^ int(dut.lfsr_out[0])
-            lfsr_out =  (int(dut.lfsr_out[0]) << 7) | (int(dut.lfsr_out[7]) << 6) | (q1 << 5) | (q2 << 4) | (int(dut.lfsr_out[4]) << 3) | (int(dut.lfsr_out[3]) << 2) | (int(dut.lfsr_out[2]) << 1) | q3"""
-                new_pattern = """        if (i == 0):
-            # Read the whole value first for cocotb 2.x compatibility
-            val = int(dut.lfsr_out.value)
-            q1 = ((val >> 6) & 1) ^ (val & 1)
-            q2 = ((val >> 5) & 1) ^ (val & 1)
-            q3 = ((val >> 1) & 1) ^ (val & 1)
-            lfsr_out =  ((val & 1) << 7) | (((val >> 7) & 1) << 6) | (q1 << 5) | (q2 << 4) | (((val >> 4) & 1) << 3) | (((val >> 3) & 1) << 2) | (((val >> 2) & 1) << 1) | q3"""
-                content = content.replace(old_pattern, new_pattern)
+            # # Fix cocotb 2.x packed array indexing in test files (dut.signal[n] -> bit extraction from value)
+            # if file.endswith('test_lfsr.py') and 'int(dut.lfsr_out[6])' in content:
+            #     # Replace the problematic indexing pattern with cocotb 2.x compatible code
+            #     old_pattern = """        if (i == 0):
+            # q1 = int(dut.lfsr_out[6]) ^ int(dut.lfsr_out[0])
+            # q2 = int(dut.lfsr_out[5]) ^ int(dut.lfsr_out[0])
+            # q3 = int(dut.lfsr_out[1]) ^ int(dut.lfsr_out[0])
+            # lfsr_out =  (int(dut.lfsr_out[0]) << 7) | (int(dut.lfsr_out[7]) << 6) | (q1 << 5) | (q2 << 4) | (int(dut.lfsr_out[4]) << 3) | (int(dut.lfsr_out[3]) << 2) | (int(dut.lfsr_out[2]) << 1) | q3"""
+            #     new_pattern = """        if (i == 0):
+            # # Read the whole value first for cocotb 2.x compatibility
+            # val = int(dut.lfsr_out.value)
+            # q1 = ((val >> 6) & 1) ^ (val & 1)
+            # q2 = ((val >> 5) & 1) ^ (val & 1)
+            # q3 = ((val >> 1) & 1) ^ (val & 1)
+            # lfsr_out =  ((val & 1) << 7) | (((val >> 7) & 1) << 6) | (q1 << 5) | (q2 << 4) | (((val >> 4) & 1) << 3) | (((val >> 3) & 1) << 2) | (((val >> 2) & 1) << 1) | q3"""
+            #     content = content.replace(old_pattern, new_pattern)
 
             # Add license network configuration for commercial EDA datapoints
             if self.requires_eda_license and file.endswith('docker-compose.yml'):

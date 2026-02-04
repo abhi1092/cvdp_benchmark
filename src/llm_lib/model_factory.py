@@ -53,6 +53,9 @@ class ModelFactory:
 
             # Vertex AI models (Claude via GCP)
             "vertex": self._create_vertex_ai_instance,
+
+            # OpenRouter models (any model via OpenRouter)
+            "openrouter": self._create_openrouter_instance,
         }
 
     def create_model(self, model_name: str, context: Any = None, key: Optional[str] = None, **kwargs) -> Any:
@@ -138,6 +141,14 @@ class ModelFactory:
     def _create_vertex_ai_instance(self, model_name: str, context: Any, key: Optional[str], **kwargs) -> VertexAI_Instance:
         """Create a Vertex AI model instance for Claude models via GCP"""
         return VertexAI_Instance(context=context, key=key, model=model_name)
+
+    def _create_openrouter_instance(self, model_name: str, context: Any, key: Optional[str], **kwargs) -> OpenAI_Instance:
+        """Create an OpenRouter model instance for any model via OpenRouter"""
+        base_url = kwargs.get('base_url', None)
+        # Strip the "openrouter/" prefix to get the actual model name for the API
+        if model_name.startswith("openrouter/"):
+            model_name = model_name[len("openrouter/"):]
+        return OpenAI_Instance(context=context, key=key, model=model_name, base_url=base_url)
 
     def register_model_type(self, model_identifier: str, factory_method):
         """

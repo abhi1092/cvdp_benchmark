@@ -178,12 +178,14 @@ An example response is:
         
         try:
             # Call the OpenAI API for scoring
+            temperature = config.get("MODEL_TEMPERATURE", 0)
             completion = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
-                ]
+                ],
+                temperature=temperature
             )
             
             result_text = completion.choices[0].message.content

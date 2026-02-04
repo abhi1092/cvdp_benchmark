@@ -170,12 +170,14 @@ class VLLM_Instance:
 
         try:
             # Create a chat completion request
+            temperature = config.get("MODEL_TEMPERATURE", 0)
             response = self.chat.chat.completions.create(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": prompt}
                 ],
+                temperature=temperature,
                 timeout=timeout
             )
 
